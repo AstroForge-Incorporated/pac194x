@@ -12,7 +12,7 @@ readme = "README.md"
 documentation = "https://docs.rs/crate/pac194x/"
 
 [dependencies]
-embedded-hal = "0.2"
+embedded-hal = "1.0"
 paste = "1.0"
 
 [dependencies.packed_struct]

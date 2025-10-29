@@ -10,7 +10,7 @@ license = "MIT OR Apache-2.0"
 description = "Helper proc macro for the pac194x crate"
 
 [lib]
-proc_macro = true
+proc-macro = true
 
 [dependencies]
 syn = { version = "1.0", features = ["full", "extra-traits"] }
