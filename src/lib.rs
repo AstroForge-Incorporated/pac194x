@@ -85,6 +85,7 @@ pub enum Error<E> {
     I2c(E),
     /// Errors such as overflowing the stack.
     Internal,
+    Packing(PackingError),
 }
 
 macro_rules! read_fn {
@@ -92,7 +93,8 @@ macro_rules! read_fn {
         paste! {
             #[doc = stringify!(Reads the $type register and deserializes into the appropriate struct)]
             pub fn [<read_ $var>](&mut self) -> Result<$type, Error<I::Error>> {
-                Ok($type::unpack(&self.block_read($type::addr())?).unwrap())
+                let bytes = self.block_read($type::addr())?;
+                Ok($type::unpack(&bytes).map_err(|e| Error::Packing(e))?)
             }
         }
     };
@@ -104,7 +106,8 @@ macro_rules! read_n_fn {
             #[doc = stringify!(Reads the $type register and deserializes into the appropriate struct)]
             pub fn [<read_ $var>](&mut self, n: u8) -> Result<$type, Error<I::Error>> {
                 assert!((1..=4).contains(&n),"Channel n must be between 1 and 4");
-                Ok($type::unpack(&self.block_read_n($type::addr(),n)?).unwrap())
+                let bytes = self.block_read_n($type::addr(),n)?;
+                Ok($type::unpack(&bytes).map_err(|e| Error::Packing(e))?)
             }
         }
     };
