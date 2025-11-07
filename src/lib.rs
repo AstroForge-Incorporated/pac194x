@@ -161,7 +161,7 @@ macro_rules! read_write_n {
 }
 
 fn vbus_to_real(raw: u16, fsr: VBusFSR) -> f32 {
-    9.0 * match fsr {
+    32.0 * match fsr {
         VBusFSR::Unipolar => (raw as f32) / 65536.0,
         VBusFSR::BipolarHV => (i16::from_ne_bytes(raw.to_le_bytes()) as f32) / 65536.0,
         VBusFSR::BipolarLV => (i16::from_ne_bytes(raw.to_le_bytes()) as f32) / 32768.0,
@@ -169,10 +169,10 @@ fn vbus_to_real(raw: u16, fsr: VBusFSR) -> f32 {
 }
 
 fn vsense_to_real(raw: u16, fsr: VSenseFSR) -> f32 {
-    0.1 * match fsr {
-        VSenseFSR::Unipolar => (raw as f32) / 65536.0,
-        VSenseFSR::BipolarHV => (i16::from_ne_bytes(raw.to_le_bytes()) as f32) / 65536.0,
-        VSenseFSR::BipolarLV => (i16::from_ne_bytes(raw.to_le_bytes()) as f32) / 32768.0,
+    match fsr {
+        VSenseFSR::Unipolar => (raw as f32) * 0.000_001_5, // 1.5 μV/LSB
+        VSenseFSR::BipolarHV => (i16::from_ne_bytes(raw.to_le_bytes()) as f32) * 0.000_003_05, // 3.05 μV/LSB
+        VSenseFSR::BipolarLV => (i16::from_ne_bytes(raw.to_le_bytes()) as f32) * 0.000_001_5, // 1.5 μV/LSB
     }
 }
 
