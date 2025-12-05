@@ -163,8 +163,8 @@ macro_rules! read_write_n {
 fn vbus_to_real(raw: u16, fsr: VBusFSR) -> f32 {
     32.0 * match fsr {
         VBusFSR::Unipolar => (raw as f32) / 65536.0,
-        VBusFSR::BipolarHV => (i16::from_ne_bytes(raw.to_le_bytes()) as f32) / 65536.0,
-        VBusFSR::BipolarLV => (i16::from_ne_bytes(raw.to_le_bytes()) as f32) / 32768.0,
+        VBusFSR::BipolarLV => (i16::from_ne_bytes(raw.to_le_bytes()) as f32) / 65536.0,
+        VBusFSR::BipolarHV => (i16::from_ne_bytes(raw.to_le_bytes()) as f32) / 32768.0,
     }
 }
 
