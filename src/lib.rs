@@ -340,7 +340,7 @@ where
             4 => fsr_reg.cfg_vs4,
             _ => unreachable!(),
         };
-        Ok(vsense_to_real(self.read_vsensen(n)?.voltage, fsr))
+        Ok(vsense_to_real(self.read_vsensen_avg(n)?.voltage, fsr))
     }
 
     // Auto generated functions for reading and writing all of our registers
