@@ -1,19 +1,17 @@
-//! A platform-agnostic driver crate for the Microchip PAC194X single/multi channel power monitor using the embedded-hal traits.
+//! A platform-agnostic driver crate for the Microchip PAC194X single/multi channel power monitor using the embedded-hal-async traits.
 //!
 //! # Usage
 //!
-//! ```rust
-//! use linux_embedded_hal::I2cdev;
+//! ```rust,ignore
 //! use pac194x::{PAC194X, AddrSelect};
 //!
 //! const SENSE_RESISTOR: f32 = 0.5;
 //!
-//! fn main() {
-//!     let i2c = I2cdev::new("/dev/i2c-1").unwrap();
-//!     let mut sensor = PAC194X::new(i2c, AddrSelect::GND).unwrap();
+//! async fn monitor(i2c: impl embedded_hal_async::i2c::I2c) {
+//!     let mut sensor = PAC194X::new(i2c, AddrSelect::GND);
 //!     loop {
-//!         let bus_voltage_1 = sensor.read_bus_voltage_n(1).unwrap();
-//!         let sense_voltage_1 = sensor.read_sense_voltage_n(1).unwrap();
+//!         let bus_voltage_1 = sensor.read_bus_voltage_n(1).await.unwrap();
+//!         let sense_voltage_1 = sensor.read_sense_voltage_n(1).await.unwrap();
 //!         println!("Channel 1 has a bus voltage of: {:.2} V", bus_voltage_1);
 //!         println!("Channel 1 is pulling a current of: {:.2} A", sense_voltage_1 / SENSE_RESISTOR);
 //!     }
@@ -28,7 +26,7 @@
 
 pub mod regs;
 
-use embedded_hal::i2c::I2c;
+use embedded_hal_async::i2c::I2c;
 use packed_struct::prelude::*;
 use paste::paste;
 use regs::*;
@@ -92,8 +90,8 @@ macro_rules! read_fn {
     ($var:ident: $type:ty) => {
         paste! {
             #[doc = stringify!(Reads the $type register and deserializes into the appropriate struct)]
-            pub fn [<read_ $var>](&mut self) -> Result<$type, Error<I::Error>> {
-                let bytes = self.block_read($type::addr())?;
+            pub async fn [<read_ $var>](&mut self) -> Result<$type, Error<I::Error>> {
+                let bytes = self.block_read($type::addr()).await?;
                 Ok($type::unpack(&bytes).map_err(|e| Error::Packing(e))?)
             }
         }
@@ -104,9 +102,9 @@ macro_rules! read_n_fn {
     ($var:ident: $type:ty) => {
         paste! {
             #[doc = stringify!(Reads the $type register and deserializes into the appropriate struct)]
-            pub fn [<read_ $var>](&mut self, n: u8) -> Result<$type, Error<I::Error>> {
+            pub async fn [<read_ $var>](&mut self, n: u8) -> Result<$type, Error<I::Error>> {
                 assert!((1..=4).contains(&n),"Channel n must be between 1 and 4");
-                let bytes = self.block_read_n($type::addr(),n)?;
+                let bytes = self.block_read_n($type::addr(),n).await?;
                 Ok($type::unpack(&bytes).map_err(|e| Error::Packing(e))?)
             }
         }
@@ -117,12 +115,12 @@ macro_rules! write_fn {
     ($var:ident: $type:ty) => {
         paste! {
             #[doc = stringify!(Writes out the $type register)]
-            pub fn [<write_ $var>](&mut self, $var: $type) -> Result<(), Error<I::Error>> {
+            pub async fn [<write_ $var>](&mut self, $var: $type) -> Result<(), Error<I::Error>> {
                 const PACKED_SIZE_WITH_ADDR: usize = core::mem::size_of::<<$type as PackedStruct>::ByteArray>() + 1;
                 let mut bytes = [0u8; PACKED_SIZE_WITH_ADDR];
                 bytes[0] = $type::addr() as u8;
                 $var.pack_to_slice(&mut bytes[1..]).unwrap();
-                self.block_write(&bytes)?;
+                self.block_write(&bytes).await?;
                 Ok(())
             }
         }
@@ -133,13 +131,13 @@ macro_rules! write_n_fn {
     ($var:ident: $type:ty) => {
         paste! {
             #[doc = stringify!(Writes out the $type register)]
-            pub fn [<write_ $var>](&mut self, $var: $type, n: u8) -> Result<(), Error<I::Error>> {
+            pub async fn [<write_ $var>](&mut self, $var: $type, n: u8) -> Result<(), Error<I::Error>> {
                 assert!((1..=4).contains(&n),"Channel n must be between 1 and 4");
                 const PACKED_SIZE_WITH_ADDR: usize = core::mem::size_of::<<$type as PackedStruct>::ByteArray>() + 1;
                 let mut bytes = [0u8; PACKED_SIZE_WITH_ADDR];
                 bytes[0] = ($type::addr() as u8) + n - 1;
                 $var.pack_to_slice(&mut bytes[1..]).unwrap();
-                self.block_write(&bytes)?;
+                self.block_write(&bytes).await?;
                 Ok(())
             }
         }
@@ -193,43 +191,59 @@ where
 
     /// The send byte protocol is used to set the internal address register pointer to the correct address
     /// location. No data is transferred.
-    fn send_byte(&mut self, addr: Address) -> Result<(), Error<I::Error>> {
+    async fn send_byte(&mut self, addr: Address) -> Result<(), Error<I::Error>> {
         self.i2c
             .write(self.address, &[addr as u8])
+            .await
             .map_err(Error::I2c)?;
         Ok(())
     }
 
     /// The receive byte protocol is used to read data from a register where the internal register addr pointer is
     /// known to be at the right location (e.g. set via `send_byte`)
-    fn receive_byte(&mut self) -> Result<u8, Error<I::Error>> {
+    async fn receive_byte(&mut self) -> Result<u8, Error<I::Error>> {
         let mut buf = [0u8; 1];
-        self.i2c.read(self.address, &mut buf).map_err(Error::I2c)?;
+        self.i2c
+            .read(self.address, &mut buf)
+            .await
+            .map_err(Error::I2c)?;
         Ok(buf[0])
     }
 
     /// Block write is used to write multiple data bytes from a register that contains more than one byte of data
     /// of from a group of contiguous registers
-    fn block_write(&mut self, bytes: &[u8]) -> Result<(), Error<I::Error>> {
-        self.i2c.write(self.address, bytes).map_err(Error::I2c)?;
+    async fn block_write(&mut self, bytes: &[u8]) -> Result<(), Error<I::Error>> {
+        self.i2c
+            .write(self.address, bytes)
+            .await
+            .map_err(Error::I2c)?;
         Ok(())
     }
 
     /// Block read is used to read multiple data bytes from a register that contains more than one byte of data or from a group
     /// of contiguous registers
-    fn block_read<const N: usize>(&mut self, addr: Address) -> Result<[u8; N], Error<I::Error>> {
+    async fn block_read<const N: usize>(
+        &mut self,
+        addr: Address,
+    ) -> Result<[u8; N], Error<I::Error>> {
         let mut buf = [0u8; N];
         self.i2c
             .write_read(self.address, &[addr as u8], &mut buf)
+            .await
             .map_err(Error::I2c)?;
         Ok(buf)
     }
 
     /// Same behavior as `block_read` but adds the channel offset to the address
-    fn block_read_n<const N: usize>(&mut self, addr: Address, n: u8) -> Result<[u8; N], Error<I::Error>> {
+    async fn block_read_n<const N: usize>(
+        &mut self,
+        addr: Address,
+        n: u8,
+    ) -> Result<[u8; N], Error<I::Error>> {
         let mut buf = [0u8; N];
         self.i2c
             .write_read(self.address, &[(addr as u8) + (n - 1)], &mut buf)
+            .await
             .map_err(Error::I2c)?;
         Ok(buf)
     }
@@ -238,30 +252,31 @@ where
     ///
     /// The accumulator data, accumulator count, Vbus and Vsense measurements are all refreshed and
     /// the accumulators are reset. The host must wait 1ms before reading accumulator or Vbus/Vsense data
-    pub fn refresh(&mut self) -> Result<(), Error<I::Error>> {
-        self.send_byte(Address::Refresh)
+    pub async fn refresh(&mut self) -> Result<(), Error<I::Error>> {
+        self.send_byte(Address::Refresh).await
     }
 
     /// Refreshes the device without resetting the accumulators
     ///
     /// Same behavior as `refresh`, but without resetting the accumulators.
-    pub fn refresh_v(&mut self) -> Result<(), Error<I::Error>> {
-        self.send_byte(Address::RefreshV)
+    pub async fn refresh_v(&mut self) -> Result<(), Error<I::Error>> {
+        self.send_byte(Address::RefreshV).await
     }
 
     /// Refreshes every PAC194X device on the bus by transmitting REFRESH_G to the
     /// general call address of 0
-    pub fn regresh_g(&mut self) -> Result<(), Error<I::Error>> {
+    pub async fn regresh_g(&mut self) -> Result<(), Error<I::Error>> {
         self.i2c
             .write(0u8, &[Address::RefreshG as u8])
+            .await
             .map_err(Error::I2c)?;
         Ok(())
     }
 
     /// Retrieves the Product ID of the connected component
-    pub fn product_id(&mut self) -> Result<ProductId, Error<I::Error>> {
-        self.send_byte(regs::Address::ProductId)?;
-        Ok(match self.receive_byte()? {
+    pub async fn product_id(&mut self) -> Result<ProductId, Error<I::Error>> {
+        self.send_byte(regs::Address::ProductId).await?;
+        Ok(match self.receive_byte().await? {
             0b0110_1000 => ProductId::PAC1941_1,
             0b0110_1001 => ProductId::PAC1942_1,
             0b0110_1010 => ProductId::PAC1943_1,
@@ -274,22 +289,22 @@ where
 
     /// The Manufacturer ID register identifies Microchip as the manufacturer of the PAC194X.
     /// This should return 0x54
-    pub fn manufacturer_id(&mut self) -> Result<u8, Error<I::Error>> {
-        self.send_byte(regs::Address::ManufacturerId)?;
-        self.receive_byte()
+    pub async fn manufacturer_id(&mut self) -> Result<u8, Error<I::Error>> {
+        self.send_byte(regs::Address::ManufacturerId).await?;
+        self.receive_byte().await
     }
 
     /// The Revision register identifies the die revision.
     /// This should return 0b00000010
-    pub fn revision_id(&mut self) -> Result<u8, Error<I::Error>> {
-        self.send_byte(regs::Address::RevisionId)?;
-        self.receive_byte()
+    pub async fn revision_id(&mut self) -> Result<u8, Error<I::Error>> {
+        self.send_byte(regs::Address::RevisionId).await?;
+        self.receive_byte().await
     }
 
     /// High level API for retrieving the bus voltage of channel `n`
-    pub fn read_bus_voltage_n(&mut self, n: u8) -> Result<f32, Error<I::Error>> {
+    pub async fn read_bus_voltage_n(&mut self, n: u8) -> Result<f32, Error<I::Error>> {
         assert!((1..=4).contains(&n), "Channel n must be between 1 and 4");
-        let fsr_reg = self.read_neg_pwr_fsr_lat()?;
+        let fsr_reg = self.read_neg_pwr_fsr_lat().await?;
         let fsr = match n {
             1 => fsr_reg.cfg_vb1,
             2 => fsr_reg.cfg_vb2,
@@ -297,14 +312,14 @@ where
             4 => fsr_reg.cfg_vb4,
             _ => unreachable!(),
         };
-        Ok(vbus_to_real(self.read_vbusn(n)?.voltage, fsr))
+        Ok(vbus_to_real(self.read_vbusn(n).await?.voltage, fsr))
     }
 
     /// High level API for retrieving the sense voltage of channel `n`
     /// Use Ohm's law with your sense resistor value (V/R) to get the sense current
-    pub fn read_sense_voltage_n(&mut self, n: u8) -> Result<f32, Error<I::Error>> {
+    pub async fn read_sense_voltage_n(&mut self, n: u8) -> Result<f32, Error<I::Error>> {
         assert!((1..=4).contains(&n), "Channel n must be between 1 and 4");
-        let fsr_reg = self.read_neg_pwr_fsr_lat()?;
+        let fsr_reg = self.read_neg_pwr_fsr_lat().await?;
         let fsr = match n {
             1 => fsr_reg.cfg_vs1,
             2 => fsr_reg.cfg_vs2,
@@ -312,13 +327,13 @@ where
             4 => fsr_reg.cfg_vs4,
             _ => unreachable!(),
         };
-        Ok(vsense_to_real(self.read_vsensen(n)?.voltage, fsr))
+        Ok(vsense_to_real(self.read_vsensen(n).await?.voltage, fsr))
     }
 
     /// Same as [read_bus_voltage_n()], but using the accumulator-based rolling average
-    pub fn read_avg_bus_voltage_n(&mut self, n: u8) -> Result<f32, Error<I::Error>> {
+    pub async fn read_avg_bus_voltage_n(&mut self, n: u8) -> Result<f32, Error<I::Error>> {
         assert!((1..=4).contains(&n), "Channel n must be between 1 and 4");
-        let fsr_reg = self.read_neg_pwr_fsr_lat()?;
+        let fsr_reg = self.read_neg_pwr_fsr_lat().await?;
         let fsr = match n {
             1 => fsr_reg.cfg_vb1,
             2 => fsr_reg.cfg_vb2,
@@ -326,13 +341,13 @@ where
             4 => fsr_reg.cfg_vb4,
             _ => unreachable!(),
         };
-        Ok(vbus_to_real(self.read_vbusn_avg(n)?.voltage, fsr))
+        Ok(vbus_to_real(self.read_vbusn_avg(n).await?.voltage, fsr))
     }
 
     /// Same as [read_sense_voltage_n()], but using the accumulator-based rolling average
-    pub fn read_avg_sense_voltage_n(&mut self, n: u8) -> Result<f32, Error<I::Error>> {
+    pub async fn read_avg_sense_voltage_n(&mut self, n: u8) -> Result<f32, Error<I::Error>> {
         assert!((1..=4).contains(&n), "Channel n must be between 1 and 4");
-        let fsr_reg = self.read_neg_pwr_fsr_lat()?;
+        let fsr_reg = self.read_neg_pwr_fsr_lat().await?;
         let fsr = match n {
             1 => fsr_reg.cfg_vs1,
             2 => fsr_reg.cfg_vs2,
@@ -340,7 +355,7 @@ where
             4 => fsr_reg.cfg_vs4,
             _ => unreachable!(),
         };
-        Ok(vsense_to_real(self.read_vsensen_avg(n)?.voltage, fsr))
+        Ok(vsense_to_real(self.read_vsensen_avg(n).await?.voltage, fsr))
     }
 
     // Auto generated functions for reading and writing all of our registers
